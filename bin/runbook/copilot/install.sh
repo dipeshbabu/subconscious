@@ -274,9 +274,11 @@ strip_subconscious() {
     echo "[]"
     return
   fi
-  jq --arg name "$PROVIDER_NAME" \
-    'map(select(.name != $name and ((.name // "") | test("subconscious"; "i") | not)))' \
-    "$file" 2>/dev/null || echo "[]"
+  jq --arg name "$PROVIDER_NAME" '
+    if type != "array" then error("model configuration must be an array")
+    elif any(.[]; type != "object") then error("model providers must be objects")
+    else map(select(.name != $name)) end
+  ' "$file"
 }
 
 write_config() {
@@ -294,7 +296,10 @@ write_config() {
 
   mkdir -p "$user_dir"
   local existing
-  existing="$(strip_subconscious "$models_json")"
+  if ! existing="$(strip_subconscious "$models_json")"; then
+    echo "Cannot read $models_json; leaving it unchanged" >&2
+    return 1
+  fi
 
   local provider_models='[]' model_id vision
   for model_id in "${SUPPORTED_MODELS[@]}"; do
@@ -319,7 +324,7 @@ write_config() {
         thinking: true,
         streaming: true,
         requestHeaders: { "x-subconscious-client": "copilot" }
-      }]')
+      }]') || return 1
   done
 
   local new_provider
@@ -333,14 +338,17 @@ write_config() {
       apiKey: $apiKeyRef,
       apiType: "messages",
       models: $models
-    }')
+    }') || return 1
 
   local merged
-  merged=$(echo "$existing" | jq --argjson p "$new_provider" '. + [$p]')
+  merged=$(echo "$existing" | jq --argjson p "$new_provider" '. + [$p]') || return 1
 
-  umask 077
-  echo "$merged" >"$models_json"
-  umask 022
+  local tmp
+  tmp="$(mktemp "${models_json}.XXXXXX")" || return 1
+  if ! printf '%s\n' "$merged" >"$tmp" || ! mv "$tmp" "$models_json"; then
+    rm -f "$tmp"
+    return 1
+  fi
   echo "$models_json"
 }
 
@@ -348,13 +356,18 @@ uninstall_config() {
   local user_dir="$1"
   local models_json="${user_dir}/chatLanguageModels.json"
   if [[ -f "$models_json" ]]; then
-    if grep -qi "$MARKER" "$models_json" 2>/dev/null; then
+    local existing
+    if ! existing="$(strip_subconscious "$models_json")"; then
+      echo "Cannot read $models_json; leaving it unchanged" >&2
+      return 1
+    fi
+    if jq -e --arg name "$PROVIDER_NAME" 'any(.[]; .name == $name)' "$models_json" >/dev/null; then
       local tmp
-      tmp="$(mktemp)"
-      jq --arg name "$PROVIDER_NAME" \
-        'map(select(.name != $name and ((.name // "") | test("subconscious"; "i") | not)))' \
-        "$models_json" >"$tmp"
-      mv "$tmp" "$models_json"
+      tmp="$(mktemp "${models_json}.XXXXXX")"
+      if ! printf '%s\n' "$existing" >"$tmp" || ! mv "$tmp" "$models_json"; then
+        rm -f "$tmp"
+        return 1
+      fi
       echo "Removed Subconscious provider from $models_json"
     else
       echo "No Subconscious provider found in $models_json"
@@ -383,7 +396,10 @@ install_hook_script() {
 }
 
 write_hooks_json() {
-  sed "s|HOOK_SH_PATH|${HOOK_DST}|g" "$HOOKS_TEMPLATE" >"$HOOKS_JSON"
+  local hook_command
+  hook_command="$(jq -rn --arg path "$HOOK_DST" '$path | @sh')"
+  jq --arg command "$hook_command" '.hooks[][].command = $command' \
+    "$HOOKS_TEMPLATE" >"$HOOKS_JSON"
 }
 
 uninstall_hooks() {
