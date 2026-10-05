@@ -829,7 +829,6 @@ func updateProfileValue(path, key, value string) error {
 		if strings.HasPrefix(trimmed, prefix) {
 			lines[index] = prefix + value
 			found = true
-			break
 		}
 	}
 	if !found {
