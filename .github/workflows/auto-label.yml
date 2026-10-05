@@ -1,0 +1,41 @@
+name: Automatic labels
+
+on:
+  issues:
+    types: [opened, reopened, edited]
+  pull_request_target:
+    types: [opened, reopened, edited, synchronize]
+  workflow_dispatch:
+    inputs:
+      number:
+        description: 'Issue or PR number; leave blank to label all currently open items'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: auto-label-${{ github.event.issue.number || github.event.pull_request.number || inputs.number || 'backfill' }}
+  cancel-in-progress: false
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Only trusted default-branch code runs, including on fork PR events.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const { pathToFileURL } = await import('node:url');
+            const { default: autoLabel } = await import(
+              pathToFileURL(`${process.env.GITHUB_WORKSPACE}/scripts/auto-label.js`).href
+            );
+            await autoLabel({ github, context, core });
