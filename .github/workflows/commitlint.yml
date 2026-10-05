@@ -2,6 +2,8 @@ name: Commit lint
 
 on:
   pull_request:
+  push:
+    branches: ['verify/**']
 
 permissions:
   contents: read
@@ -19,4 +21,4 @@ jobs:
           node-version: 22
       - run: npm install
       - name: Lint pull request commits
-        run: npx commitlint --from ${{ github.event.pull_request.base.sha }} --to ${{ github.event.pull_request.head.sha }} --verbose
+        run: npx commitlint --from origin/main --to HEAD --verbose
