@@ -14,9 +14,10 @@ function runInstall(
   home,
   gatewayUrl = 'https://gateway.example',
   overrides = {},
+  action = 'install',
 ) {
   return new Promise((resolve, reject) => {
-    const child = spawn('bash', [installPath.pathname, 'install'], {
+    const child = spawn('bash', [installPath.pathname, action], {
       env: {
         ...process.env,
         HOME: home,
@@ -24,7 +25,7 @@ function runInstall(
         API_KEY: 'test-copilot-key',
         MODEL: 'subconscious/glm-5.3-marathon',
         SUBCONSCIOUS_MODELS: 'subconscious/glm-5.3-marathon',
-        MBTA_ENV_FILE: '/dev/null',
+        SUBC_ENV_FILE: os.devNull,
         ...overrides,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -154,5 +155,72 @@ test('Copilot installer normalizes gateway origins and API paths', async () => {
     } finally {
       await fs.rm(home, { recursive: true, force: true });
     }
+  }
+});
+
+test('Copilot setup rejects malformed provider configuration without changing files', async () => {
+  for (const original of ['{broken', '{}', 'null', '[null]', '["provider"]']) {
+    for (const action of ['install', 'uninstall']) {
+      const home = await fs.mkdtemp(
+        path.join(os.tmpdir(), 'subc-copilot-invalid-'),
+      );
+      try {
+        const directory = await createVsCodeUserDirectory(home);
+        const file = path.join(directory, 'chatLanguageModels.json');
+        await fs.writeFile(file, original);
+        const result = await runInstall(
+          home,
+          'https://gateway.example',
+          {},
+          action,
+        );
+        assert.notEqual(result.code, 0, `${action} accepted ${original}`);
+        assert.equal(await fs.readFile(file, 'utf8'), original);
+        await assert.rejects(fs.access(path.join(home, '.copilot')), {
+          code: 'ENOENT',
+        });
+      } finally {
+        await fs.rm(home, { recursive: true, force: true });
+      }
+    }
+  }
+});
+
+test('Copilot install and uninstall preserve user providers with similar names', async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'subc-copilot-owned-'));
+  try {
+    const directory = await createVsCodeUserDirectory(home);
+    const file = path.join(directory, 'chatLanguageModels.json');
+    const other = {
+      name: 'My Subconscious experiments',
+      models: [{ id: 'custom' }],
+    };
+    await fs.writeFile(
+      file,
+      JSON.stringify([other, { name: 'Subconscious Gateway', models: [] }]),
+    );
+    for (const action of ['install', 'install', 'uninstall']) {
+      const result = await runInstall(
+        home,
+        'https://gateway.example',
+        {},
+        action,
+      );
+      assert.equal(result.code, 0, result.stderr);
+      const providers = JSON.parse(await fs.readFile(file, 'utf8'));
+      assert.deepEqual(
+        providers.filter(
+          (provider) => provider.name !== 'Subconscious Gateway',
+        ),
+        [other],
+      );
+      assert.equal(
+        providers.filter((provider) => provider.name === 'Subconscious Gateway')
+          .length,
+        action === 'uninstall' ? 0 : 1,
+      );
+    }
+  } finally {
+    await fs.rm(home, { recursive: true, force: true });
   }
 });
