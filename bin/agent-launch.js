@@ -115,10 +115,18 @@ export function resolveInputs(
       const text = String(resolved[input.name]).trim();
       const number = Number(text);
       if (!/^-?\d+$/.test(text) || !Number.isSafeInteger(number)) {
-        throw new Error(`${source} must be a safe decimal integer`);
+        throw new Error(
+          input.min === 1
+            ? `${source} must be a positive integer`
+            : `${source} must be a safe decimal integer`,
+        );
       }
       if (input.min !== undefined && number < input.min) {
-        throw new Error(`${source} must be an integer >= ${input.min}`);
+        throw new Error(
+          input.min === 1
+            ? `${source} must be a positive integer`
+            : `${source} must be an integer >= ${input.min}`,
+        );
       }
       if (input.max !== undefined && number > input.max) {
         throw new Error(`${source} must be an integer <= ${input.max}`);
