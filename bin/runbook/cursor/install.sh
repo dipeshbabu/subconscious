@@ -44,7 +44,6 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK_SRC="${SCRIPT_DIR}/hook.sh"
-HOOKS_TEMPLATE="${SCRIPT_DIR}/hooks.json"
 
 # Load shared env from SUBC_ENV_FILE, or a sibling .env / env.example.
 SHARED_ENV="${SUBC_ENV_FILE:-${SCRIPT_DIR}/../.env}"
@@ -209,13 +208,11 @@ remove_hook_entries() {
 }
 
 merge_hooks_json() {
-  if [[ ! -f "$HOOKS_JSON" ]]; then
-    sed "s|HOOK_SH_PATH|${HOOK_DST}|g" "$HOOKS_TEMPLATE" >"$HOOKS_JSON"
-    return
-  fi
-  # Replace our marker entries, then register the two lifecycle events we use.
-  remove_hook_entries "$HOOKS_JSON" "$MARKER"
-  merge_hook_entries "$HOOKS_JSON" "$MARKER" "$HOOK_DST" beforeSubmitPrompt preCompact
+  local command
+  command="$(jq -rn --arg path "$HOOK_DST" '$path | @sh')"
+  # The merge handles both first install and refresh; jq escapes JSON while
+  # @sh keeps spaces and shell characters inside the executable path.
+  merge_hook_entries "$HOOKS_JSON" "$MARKER" "$command" beforeSubmitPrompt preCompact
 }
 
 uninstall_hooks() {
