@@ -157,7 +157,7 @@ func TestProfileSelectionRequestsFullStateReload(t *testing.T) {
 
 func TestUpdateProfileValueReplacesDuplicateDefinitions(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "profile.env")
-	text := "GATEWAY_URL=https://first.example\n# keep this\nexport GATEWAY_URL=https://last.example\r\nMODEL=subconscious/test\n"
+	text := "GATEWAY_URL=https://first.example\n# keep this\nexport\tGATEWAY_URL=https://last.example\r\nMODEL=subconscious/test\n"
 	if err := os.WriteFile(file, []byte(text), 0o600); err != nil {
 		t.Fatal(err)
 	}
