@@ -1,25 +1,13 @@
 #!/usr/bin/env bash
-# Refresh the Subconscious provider from the live catalog, then launch Pi.
-# Other providers in models.json are preserved.
+# Refresh the Subconscious provider from the live catalog, then start the pi
+# argv subc built. Other providers in models.json are preserved.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-GATEWAY_URL="${GATEWAY_URL:-}"
-API_KEY="${PI_API_KEY:-${API_KEY:-}}"
-MODEL="${MODEL:-subconscious/glm-5.3-marathon}"
-PI_DIR="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
-MODELS_JSON="${PI_DIR}/models.json"
+source "${SCRIPT_DIR}/../lib.sh"
 
-if [[ -z "$GATEWAY_URL" || -z "$API_KEY" ]]; then
-  echo "error: GATEWAY_URL and API_KEY are required to configure Pi" >&2
-  exit 1
-fi
+# stdin can hold a headless prompt, which belongs to Pi.
+"${SCRIPT_DIR}/install.sh" install </dev/null >/dev/null
 
-"${SCRIPT_DIR}/install.sh" install \
-  --gateway-url "$GATEWAY_URL" \
-  --api-key "$API_KEY" \
-  --model "$MODEL" \
-  >/dev/null
-
-exec pi --provider subconscious --model "$MODEL" "$@"
+subc_exec -- "$@"

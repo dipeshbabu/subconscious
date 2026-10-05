@@ -161,6 +161,114 @@ The packaged integrations live in `bin/runbook`.
 | `subc pi` | Refresh the Pi provider from the live catalog, then launch |
 | `subc dsh` | Launch the DeepSeek Harness Web UI with a temporary provider populated from the live catalog |
 
+## Headless runs
+
+`subc <agent> headless PROMPT [args...]` runs one task without a terminal UI and exits with the agent's status. It works for `claude`, `codex`, `opencode`, `pi`, `marathon`, and `dsh`, and uses the same setup as an interactive launch. It never prompts: there is no update check, a missing agent fails with its install command, stdin is not read, and stdout carries only the agent's own output. Remaining arguments go to the agent, for example `subc claude headless "fix the failing test" --output-format stream-json --verbose`. subc reads `-p`/`--profile` and `--model` itself; put agent options with those names after `--`.
+
+The agents keep their own permission defaults, so a run that should edit files usually needs the agent's permission flags in `[args...]`. For example, `codex exec` uses a read-only sandbox and requires a git repository unless given `--skip-git-repo-check`.
+
+Model, endpoint, and key resolve as for any launch, so a logged-in user needs nothing extra. To point a run somewhere else:
+
+| Input | How to set it |
+| --- | --- |
+| Model | `--model`, or `SUBCONSCIOUS_MODEL` |
+| Endpoint | `SUBCONSCIOUS_BASE_URL`. In a headless run every agent uses it, including Claude Code (`CLAUDE_GATEWAY_URL` is ignored). |
+| Key | `SUBCONSCIOUS_API_KEY`, otherwise the `subc login` key |
+
+```bash
+SUBCONSCIOUS_BASE_URL=https://gateway.example SUBCONSCIOUS_API_KEY=... \
+  subc codex headless "fix the failing test" --model subconscious/deepseek-v4.1-flash-marathon
+```
+
+The endpoint must speak the same APIs as the Subconscious gateway: Anthropic Messages for Claude Code, OpenAI Responses for Codex, and OpenAI Chat Completions for the others.
+
+| Agent | Runs |
+| --- | --- |
+| `claude` | `claude -p -- PROMPT` |
+| `codex` | `codex exec -- PROMPT` |
+| `opencode` | `opencode run`, with the prompt on stdin |
+| `pi` | `pi --print`, with the prompt on stdin |
+| `marathon` | `marathon --print=PROMPT` |
+| `dsh` | `dsh --profile headless`, with the prompt on stdin |
+
+The prompt is always the argument after `headless`, including for `dsh`, which no longer reads a task piped into subc. Where the table says stdin, subc passes the prompt that way so it reaches the agent unchanged even when it starts with `-` or `@`. On Windows only `dsh` supports headless runs.
+
+The exit status is the agent's own. Pi 1.0.1 exits 1 when the model request fails in its default text output, but 0 with `--mode json`, so check its JSON output for errors. Pi also trims whitespace around a prompt it reads from stdin.
+
+A blank prompt, and `-h` or `--help` anywhere in a headless run, are refused so a scripted run never reports success without doing the task.
+
+Stopping subc with SIGTERM or SIGHUP stops the agent too. SIGKILL cannot be forwarded, so a runner that may kill subc should start it in its own process group and kill the group.
+
+## Harness manifest
+
+`subc harness-manifest` prints how this version of subc installs, configures, and launches each agent above, so other tools can copy the setup exactly instead of re-implementing it.
+
+```bash
+subc harness-manifest --json   # full manifest
+subc harness-manifest          # summary table in a terminal, JSON when piped
+```
+
+The manifest is built when the command runs, from the agent files subc ships (`bin/runbook/<id>/agent.json`). Those files are what the launcher itself executes: launch and headless argv, flags, input defaults, env, and Codex `-c` overrides come from them, so the manifest describes what runs on macOS and Linux. Windows builds its own Codex catalog and `-c` list. The command adds `cli_version` from `package.json`.
+
+| Field | Meaning |
+| --- | --- |
+| `schema_version` | Raised when a field is renamed, removed, or changes meaning. New fields do not raise it. |
+| `cli_version` | The installed `subconscious-cli` version. |
+| `tokens` | Placeholders used in values (listed below). |
+| `runbook_env` | What subc passes to every launch: `order` of the layers, `inherited` sources (profile values, then `process.env`), `fixed` values set last, `runbook_scripts` extras, and `per_harness` extras (Claude's model picker and `SUBC_CLAUDE_SETTINGS`). |
+| `harnesses.<id>` | One entry per agent. |
+
+Each `harnesses.<id>` entry has:
+
+| Field | Meaning |
+| --- | --- |
+| `install` | `method`, `package` or `repository`, `version` or `channel`, `minimum_version`, release `targets`, and the per-OS `commands`. |
+| `prerequisites` | Commands the runbook needs, such as `jq`, with what needs them and whether they are required. `a\|b` means either one. |
+| `binary` | Executable name, or `null` for IDE integrations. |
+| `launch` | `argv` template, `headless_argv` for `subc <agent> headless` (absent when unsupported), `headless_stdin` when the prompt is passed on stdin instead, `headless_platforms` (`darwin`, `linux`, `win32`) where it works, `resume` and `handoff` argv for `subc sessions`, Codex's `config_flag`, and whether a launch also writes persistent files. |
+| `inputs` | Profile or environment variables subc reads for the agent, with `default`, `flag`, `aliases`, and profile metadata. `export: true` inputs are also passed to the agent and listed in `env`. |
+| `env` | Variables the agent receives: `value`, what it is (`description`), and the `override` variables that win when set. |
+| `config` | Files, directories, `-c` overrides (with `condition`), flags, and JSON-in-env. |
+| `capabilities.compaction` | `default`, plus `on`, `off`, and `threshold`, each with the exact knob and whether subc sets it (`set_by_subc`). |
+| `capabilities.mcp` | Whether subc configures MCP, and which transports. |
+| `capabilities.headers` | Headers sent and on which requests. |
+| `capabilities.hooks` | Hook events installed, what each posts, and where. |
+
+A compaction knob has `kind`, `name`, `value`, and `override`. When `kind` is `config-field` or `model-catalog-field`, `config` names the `config` entry (its `path` or `name`) that holds it. `threshold.semantics` says what the number means: `window` is the context size the agent compacts against (Claude Code, OpenCode, Pi, DeepSeek Harness, Copilot); `trigger` is the token count that starts compaction (Codex).
+
+Enumerated values:
+
+| Field | Values |
+| --- | --- |
+| `install.method` | `npm`, `script`, `github-release`, `user`, `null` |
+| `compaction.default` | `on`, `unknown` |
+| knob `kind` | `env`, `cli-config`, `config-field`, `model-catalog-field`, `null` |
+| `threshold.semantics` | `window`, `trigger` |
+| `config[].kind` | `file`, `dir`, `cli-flag`, `cli-config`, `env-json` |
+| `config[].lifetime` | `launch` (removed or not written to disk), `persistent`, `legacy` (left by older setups) |
+
+Placeholders:
+
+| Token | Meaning |
+| --- | --- |
+| `{baseUrl}`, `{baseUrlV1}` | Gateway origin, and the origin followed by `/v1` |
+| `{apiKey}`, `{model}` | The agent's API key (its own key input, else `API_KEY`) and the launch model |
+| `${NAME}` | The value of env var `NAME` at launch; left in place only where it has no default |
+| `{catalog}`, `{catalog[N]}` | All live catalog models (newline-separated), or the one at index N (clamped to the last) |
+| `{args}`, `{config}` | Passed-through arguments, and Codex's `-c` overrides |
+| `{prompt}` | The task given to `subc <agent> headless` |
+| `{sessionId}`, `{sessionFile}` | A local session's ID or file, for `launch.resume` |
+| `{tempFile}`, `{tmp}` | A temporary file the runbook writes (its `config` entry says whether it is removed), the system temp directory |
+| `{opencodeConfig}`, `{claudeSettings}` | Documents shown in the matching `config` entries |
+| `{target}` | A release target triple from `install.targets` or `install.windows_targets` |
+| `{binDir}`, `{PATH}`, `<install dirs>` | Parts of the `PATH` subc builds |
+| `<agent key>` | The agent-specific API key input, such as `CODEX_API_KEY` |
+| `<id>`, `models[]` | Any catalog model ID, and every element of a models array |
+| `<runbook>` | The installed `bin/runbook` directory |
+| `<VS Code user dir>` | The VS Code user settings directory |
+
+`verified: false` means subc does not set the value, or cannot prove its effect; a `note` says which. Entries describing files a runbook writes (the Codex catalog, Pi's `models.json`, the DeepSeek overlay, Copilot's provider, hooks) are descriptions of that script; values they take from inputs are filled in from the input defaults.
+
 ## Long screenshot sessions
 
 Coding agents resend every screenshot on every turn, so a long computer-use or screenshot session grows until the gateway refuses it. For vision models, subc applies one rule in Pi and OpenCode before a request leaves the machine: keep the newest screenshots, up to 30 and about 25 MiB in total, and put the text `image` where older ones were. It never removes more than one screenshot per turn, because Subconscious Cache reuses around one removed screenshot, not several; a big screenshot can take the total past 25 MiB for a few turns while it catches up, and only past 30 MiB does it drop straight back to 25. The gateway applies the same rule, so it receives exactly what its own window would produce, and Subconscious Cache still reuses the rest of the conversation: each turn only reads the new screenshot.

@@ -1,14 +1,9 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-
-const runPath = new URL(
-  '../bin/runbook/deepseek-harness/run.sh',
-  import.meta.url,
-);
+import { launchCommand, run } from './helpers/agent-command.js';
 
 async function makeFakeDsh(root) {
   const binDir = path.join(root, 'bin');
@@ -36,8 +31,11 @@ exit "\${DSH_FAKE_EXIT_CODE:-0}"
 }
 
 function runHarness(root, binDir, args = [], overrides = {}) {
-  return new Promise((resolve, reject) => {
-    const child = spawn('bash', [runPath.pathname, ...args], {
+  const headless = args[0] === 'headless';
+  return run(
+    launchCommand('deepseek-harness', {
+      args: headless ? args.slice(2) : args,
+      prompt: headless ? args[1] : undefined,
       env: {
         ...process.env,
         PATH: `${binDir}${path.delimiter}${process.env.PATH || ''}`,
@@ -58,21 +56,8 @@ function runHarness(root, binDir, args = [], overrides = {}) {
         DSH_API_KEY_FILE: path.join(root, 'api-key'),
         ...overrides,
       },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk;
-    });
-    child.on('error', reject);
-    child.on('close', (code) => resolve({ code, stdout, stderr }));
-  });
+    }),
+  );
 }
 
 async function readNullArgs(file) {
@@ -91,7 +76,16 @@ test('DeepSeek Harness launches web with a temporary live-catalog provider', asy
     assert.equal(args[0], 'web');
     assert.equal(args[1], '--patch');
     assert.deepEqual(args.slice(3), ['--port', '8080']);
-    await assert.rejects(fs.access(args[2]));
+    // A detached watcher removes the overlay once dsh has exited.
+    let overlayGone = false;
+    for (let i = 0; i < 40 && !overlayGone; i++) {
+      overlayGone = await fs.access(args[2]).then(
+        () => false,
+        () => true,
+      );
+      if (!overlayGone) await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.ok(overlayGone, 'overlay was not removed');
 
     const overlay = await fs.readFile(path.join(root, 'overlay.yml'), 'utf8');
     assert.match(overlay, /provider: subconscious/);
@@ -145,7 +139,8 @@ test('DeepSeek Harness supports headless mode and mirrors its exit status', asyn
     assert.equal(result.code, 7);
     const args = await readNullArgs(path.join(root, 'args'));
     assert.deepEqual(args.slice(0, 2), ['--profile', 'headless']);
-    assert.deepEqual(args.slice(-1), ['fix the tests']);
+    // The task goes on stdin, so nothing follows the overlay path.
+    assert.equal(args.length, 4);
     const overlay = await fs.readFile(path.join(root, 'overlay.yml'), 'utf8');
     assert.match(
       overlay,

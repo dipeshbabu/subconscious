@@ -14,6 +14,7 @@ import {
   agentCommandName,
   agentList,
   isAgentHelpRequest,
+  isHeadlessRequest,
   parseAgentAction,
   resolveAgent,
   runAgent,
@@ -28,6 +29,11 @@ import {
 import { renderBanner } from './branding.js';
 import { c } from './colors.js';
 import { feedbackCommand, printFeedbackHelp } from './feedback.js';
+import {
+  harnessManifestCommand,
+  printHarnessManifestHelp,
+} from './harness-manifest.js';
+import { headlessPromptIndex } from './headless-args.js';
 import { resolveModelCatalog } from './models.js';
 import {
   configCommand,
@@ -86,6 +92,7 @@ function printHelp() {
 
   ${c.bold}Coding agents${c.reset}
 ${agents}
+    ${c.cyan}harness-manifest${c.reset}  Print how each agent is installed and launched (JSON)
 
   ${c.bold}Options${c.reset}
     ${c.dim}--model <id>${c.reset}   Model to use (profile MODEL, or first live catalog model if UNSET)
@@ -111,6 +118,8 @@ ${agents}
     ${c.dim}$${c.reset} subc cursor install
     ${c.dim}$${c.reset} subc cursor uninstall
     ${c.dim}$${c.reset} subc pi install
+    ${c.dim}$${c.reset} subc harness-manifest --json
+    ${c.dim}$${c.reset} subc codex headless "fix the failing test"
     ${c.dim}$${c.reset} subc -p staging codex
 
   ${c.dim}Use subc <command> help for command-specific usage.${c.reset}
@@ -245,12 +254,45 @@ const authCommands = {
   whoami: whoamiCommand,
 };
 
+/**
+ * Position of the headless prompt in the full argv, or -1. It is decided on
+ * the words left once profile flags are removed, which is what the agent
+ * launcher sees, so both agree on whether the run is headless.
+ */
+function headlessPromptPosition(argv) {
+  const kept = [];
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    const afterCommand = kept.slice(1).map((index) => argv[index]);
+    if (
+      kept.length > 0 &&
+      headlessPromptIndex(afterCommand) === afterCommand.length
+    ) {
+      return i;
+    }
+    if (arg === '--') return -1;
+    if (arg === '--profile' || arg === '-p') {
+      i++;
+      continue;
+    }
+    if (arg.startsWith('--profile=')) continue;
+    kept.push(i);
+  }
+  return -1;
+}
+
 function extractProfile(argv) {
   let profileName = process.env.SUBC_PROFILE?.trim() || DEFAULT_PROFILE;
   let profileExplicit = false;
   const args = [];
+  // The headless prompt is opaque, even when it looks like --profile.
+  const promptIndex = headlessPromptPosition(argv);
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
+    if (i === promptIndex) {
+      args.push(arg);
+      continue;
+    }
     if (arg === '--') {
       args.push(...argv.slice(i));
       break;
@@ -296,15 +338,32 @@ async function main() {
     return;
   }
 
+  // Machine-readable output: skip the update check so nothing else reaches
+  // stdout and no npm request is made.
+  if (command === 'harness-manifest') {
+    if (isHelpArg(args[1])) {
+      printHarnessManifestHelp();
+      return;
+    }
+    harnessManifestCommand(args.slice(1));
+    return;
+  }
+
   const launchTui =
     !command &&
     process.stdin.isTTY === true &&
     process.stdout.isTTY === true &&
     process.env.TERM !== 'dumb';
 
+  // Headless runs are scripted: no npm request and no update prompt.
+  const headlessAgent = resolveAgent(command);
+  const headless = Boolean(
+    headlessAgent && isHeadlessRequest(headlessAgent, args.slice(1)),
+  );
+
   // Explicit commands can wait on npm. The TUI opens immediately and prompts
   // only after a newer version is found.
-  if (!launchTui) {
+  if (!launchTui && !headless) {
     const update = await showUpdateNotice();
     if (update?.action === 'updated' || update?.action === 'cancel') return;
   }

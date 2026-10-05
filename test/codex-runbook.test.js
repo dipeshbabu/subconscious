@@ -4,6 +4,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { after, test } from 'node:test';
+import { AGENTS } from '../bin/agent-data.js';
+import { launchCommand, runSync } from './helpers/agent-command.js';
 
 const testDir = await fs.mkdtemp(path.join(os.tmpdir(), 'subc-codex-test-'));
 const fakeCodex = path.join(testDir, 'codex');
@@ -35,11 +37,8 @@ test('Codex advertises image input for DeepSeek V4.1 only, selected or in the pi
   const visionModel = 'subconscious/deepseek-v4.1-flash-marathon';
   const otherModel = 'subconscious/deepseek-v4-flash-marathon';
   for (const selected of [visionModel, otherModel]) {
-    const result = spawnSync(
-      'bash',
-      [new URL('../bin/runbook/codex/run.sh', import.meta.url).pathname],
-      {
-        encoding: 'utf8',
+    const result = runSync(
+      launchCommand('codex', {
         env: {
           ...process.env,
           PATH: `${testDir}:${process.env.PATH}`,
@@ -51,11 +50,10 @@ test('Codex advertises image input for DeepSeek V4.1 only, selected or in the pi
             visionModel,
             `${visionModel}-other`,
           ].join('\n'),
-          SUBC_ENV_FILE: os.devNull,
           CODEX_DIR: path.join(testDir, '.codex'),
           CAPTURED_CATALOG: capturedCatalog,
         },
-      },
+      }),
     );
     assert.equal(result.status, 0, result.stderr);
     const catalog = JSON.parse(await fs.readFile(capturedCatalog, 'utf8'));
@@ -73,22 +71,21 @@ test('Codex advertises image input for DeepSeek V4.1 only, selected or in the pi
 // Runs the runbook against the stub `codex` above and returns the model catalog
 // it generated. `env` overrides are layered on top of the shared defaults.
 async function captureCatalog(env = {}) {
-  const runbook = new URL('../bin/runbook/codex/run.sh', import.meta.url);
-  const result = spawnSync('bash', [runbook.pathname], {
-    encoding: 'utf8',
-    env: {
-      ...process.env,
-      PATH: `${testDir}:${process.env.PATH}`,
-      GATEWAY_URL: 'https://gateway.example',
-      API_KEY: 'sk-test',
-      MODEL: 'subconscious/glm-5.3-marathon',
-      SUBC_ENV_FILE: os.devNull,
-      CODEX_DIR: path.join(testDir, '.codex'),
-      CAPTURED_CATALOG: capturedCatalog,
-      CAPTURED_ARGS: capturedArgs,
-      ...env,
-    },
-  });
+  const result = runSync(
+    launchCommand('codex', {
+      env: {
+        ...process.env,
+        PATH: `${testDir}:${process.env.PATH}`,
+        GATEWAY_URL: 'https://gateway.example',
+        API_KEY: 'sk-test',
+        MODEL: 'subconscious/glm-5.3-marathon',
+        CODEX_DIR: path.join(testDir, '.codex'),
+        CAPTURED_CATALOG: capturedCatalog,
+        CAPTURED_ARGS: capturedArgs,
+        ...env,
+      },
+    }),
+  );
 
   assert.equal(result.status, 0, result.stderr);
   return JSON.parse(await fs.readFile(capturedCatalog, 'utf8'));
@@ -250,6 +247,38 @@ test('Codex launch no longer pins a legacy Codex for subagents', async () => {
     !args.some((arg) => arg === 'features.multi_agent=true'),
     args.join(' '),
   );
+});
+
+test('status and uninstall still run when a saved setting is invalid', () => {
+  const home = path.join(testDir, 'bad-settings-home');
+  const cli = new URL('../bin/cli.js', import.meta.url).pathname;
+  const agents = AGENTS.filter((agent) =>
+    agent.runbook.setup_actions?.some((action) => action !== 'install'),
+  );
+  assert.ok(agents.length >= 6);
+  for (const agent of agents)
+    for (const action of agent.runbook.setup_actions) {
+      if (action === 'install') continue;
+      const result = spawnSync(process.execPath, [cli, agent.command, action], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          HOME: home,
+          SUBC_CONFIG_DIR: path.join(home, 'subc'),
+          CODEX_REASONING_EFFORT: 'bogus',
+          MODEL: 'not a model!',
+        },
+      });
+      // Copilot's status needs a VS Code install to inspect.
+      if (agent.id === 'copilot')
+        assert.doesNotMatch(result.stderr, /model|must be one of/);
+      else
+        assert.equal(
+          result.status,
+          0,
+          `${agent.id} ${action}: ${result.stderr}`,
+        );
+    }
 });
 
 test('Codex launch adds its hooks next to the ones already in hooks.json', async () => {

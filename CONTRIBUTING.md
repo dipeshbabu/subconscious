@@ -53,14 +53,12 @@ The hook rejects any other subject. The same rules run in CI on every commit in 
 
 - `package.json` `version`
 - `CHANGELOG.md`
-- `bin/registry.generated.json`
-- `bin/runbook/model-capabilities.generated.sh`
 
-Release Please updates the version and changelog when its release pull request merges. After editing `agents/registry.json`, regenerate:
+Release Please updates the version and changelog when its release pull request merges.
 
-```bash
-npm run generate
-```
+## Agents
+
+Each agent's data lives only in `bin/runbook/<id>/agent.json`, and the code reads it at runtime. To change a default, flag, env value, argv, or help text, edit that file. The exception is a file a runbook writes, such as the Codex model catalog or the DeepSeek Harness overlay: its contents live in the runbook, and on Windows in `bin/windows/launch.js` and `bin/windows/setup.js`. See [bin/runbook/README.md](bin/runbook/README.md).
 
 ## Checks before a pull request
 

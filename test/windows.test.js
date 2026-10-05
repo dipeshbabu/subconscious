@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { agentBinary } from '../bin/agent-data.js';
 import { agentList, resolveAgent } from '../bin/agents.js';
 import { nativeTargetName } from '../bin/tui.js';
 import { detectInstallTarget } from '../bin/update-check.js';
@@ -48,7 +49,7 @@ test('Marathon is the native binary on every platform and legacy aliases are saf
   const agent = resolveAgent('marathon');
   assert.equal(agent.id, 'subconscious-code');
   assert.equal(agent.command, 'marathon');
-  assert.equal(agent.bin, 'marathon');
+  assert.equal(agentBinary(agent), 'marathon');
   assert.equal(resolveAgent('sc'), agent);
   assert.equal(resolveAgent('subconscious-code'), agent);
   assert.equal(
@@ -593,7 +594,7 @@ test('DeepSeek overlay is ephemeral, has no API key, and supports headless argv'
   const root = await temporary(t);
   const spec = await windowsLaunch(
     'deepseek-harness',
-    ['headless', 'hello\nworld'],
+    ['headless', '- hello\nworld', '--', '--json'],
     {
       ...env,
       DEEPSEEK_HARNESS_CONTEXT_WINDOW: '123456',
@@ -602,6 +603,9 @@ test('DeepSeek overlay is ephemeral, has no API key, and supports headless argv'
     { tempRoot: root },
   );
   assert.deepEqual(spec.args.slice(0, 3), ['--profile', 'headless', '--patch']);
+  // The task goes on stdin, so a leading "-" cannot parse as an option.
+  assert.deepEqual(spec.args.slice(4), ['--json']);
+  assert.equal(spec.input, '- hello\nworld');
   const overlay = await fs.readFile(spec.args[3], 'utf8');
   assert.match(overlay, /contextWindow: 123456/);
   assert.match(overlay, /maxTokens: 6543/);
@@ -1260,4 +1264,98 @@ test('Windows OpenCode launch loads the image window plugin', async () => {
   const config = JSON.parse(env.OPENCODE_CONFIG_CONTENT);
   assert.equal(config.plugin.length, 1);
   await fs.access(config.plugin[0]);
+});
+
+test('runWindows writes input to the child stdin and mirrors its exit code', async (t) => {
+  const root = await temporary(t);
+  const out = path.join(root, 'stdin.txt');
+  const code = await runWindows(
+    process.execPath,
+    [
+      '-e',
+      'let d="";process.stdin.on("data",(c)=>{d+=c}).on("end",()=>{require("fs").writeFileSync(process.argv[1],d);process.exit(3)})',
+      out,
+    ],
+    { env: process.env, input: '- hi\n"there"' },
+  );
+  assert.equal(code, 3);
+  assert.equal(await fs.readFile(out, 'utf8'), '- hi\n"there"');
+});
+
+test('pi and marathon drop one -- separator, like the unix runbooks', async () => {
+  const pi = await windowsLaunch('pi', ['--', '--thinking', 'high'], env);
+  assert.deepEqual(pi.args.slice(-2), ['--thinking', 'high']);
+  assert.ok(!pi.args.includes('--'), pi.args.join(' '));
+  const sc = await windowsLaunch(
+    'subconscious-code',
+    ['--', '--model', 'x'],
+    env,
+  );
+  assert.deepEqual(sc.args, ['--model', 'x']);
+});
+
+test('Windows Codex reads its settings and flags from the agent file', async (t) => {
+  const root = await temporary(t);
+  const launch = async (args, extra = {}) => {
+    const spec = await windowsLaunch(
+      'codex',
+      args,
+      { ...env, ...extra },
+      {
+        tempRoot: root,
+      },
+    );
+    t.after(spec.cleanup);
+    return spec;
+  };
+  const plain = await launch([
+    '--subagent-effort',
+    'low',
+    '--max-subagents',
+    '3',
+  ]);
+  assert.ok(
+    plain.args.includes(
+      'model_providers.subconscious.stream_idle_timeout_ms=900000',
+    ),
+  );
+  assert.deepEqual(plain.args.slice(-4), [
+    '--subagent-effort',
+    'low',
+    '--max-subagents',
+    '3',
+  ]);
+  const tuned = await launch([
+    '--stream-idle-timeout',
+    '1200',
+    '--subagents',
+    '--max-subagents',
+    '6',
+  ]);
+  assert.ok(
+    tuned.args.includes(
+      'model_providers.subconscious.stream_idle_timeout_ms=1200',
+    ),
+  );
+  assert.ok(tuned.args.includes('agents.max_threads=6'));
+  assert.equal(tuned.command, 'npx');
+  assert.equal(plain.env.SUBCONSCIOUS_GATEWAY_URL, 'https://gateway.example');
+});
+
+test('Windows agents other than Claude get the gateway and key as SUBCONSCIOUS_*', async () => {
+  for (const id of ['pi', 'subconscious-code', 'opencode']) {
+    const spec = await windowsLaunch(id, [], { ...env, PI_API_KEY: 'sk-pi' });
+    assert.equal(
+      spec.env.SUBCONSCIOUS_GATEWAY_URL,
+      'https://gateway.example',
+      id,
+    );
+    assert.equal(
+      spec.env.SUBCONSCIOUS_API_KEY,
+      id === 'pi' ? 'sk-pi' : 'sk-test',
+      id,
+    );
+  }
+  const claude = await windowsLaunch('claude-code', [], env);
+  assert.equal(claude.env.SUBCONSCIOUS_GATEWAY_URL, undefined);
 });

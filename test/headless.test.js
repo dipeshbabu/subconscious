@@ -1,0 +1,631 @@
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { after, test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { AGENTS, agentById, agentCommandName } from '../bin/agent-data.js';
+import { parseAgentAction } from '../bin/agents.js';
+import { loadHarnessManifest } from '../bin/harness-manifest.js';
+
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
+
+const PROMPTS = [
+  'fix the "bug"\nthen run -p --model trick',
+  '- start with a markdown bullet',
+  '--looks-like-a-flag',
+  '@file-looking prompt',
+];
+let PROMPT = PROMPTS[0];
+const EXTRA = ['--extra-flag', 'value'];
+// Each runbook drops the separator, so the agent sees the same options.
+const EXTRA_FORMS = [EXTRA, ['--', ...EXTRA]];
+const MODEL = 'subconscious/glm-5.3-marathon';
+const HEADLESS_AGENTS = [
+  'claude-code',
+  'codex',
+  'opencode',
+  'pi',
+  'subconscious-code',
+  'deepseek-harness',
+];
+
+const testDir = await fs.mkdtemp(path.join(os.tmpdir(), 'subc-headless-'));
+const binDir = path.join(testDir, 'bin');
+const argsFile = path.join(testDir, 'argv');
+const stdinFile = path.join(testDir, 'stdin');
+const CALLER_STDIN = 'caller input that a headless run must not read';
+await fs.mkdir(binDir, { recursive: true });
+for (const bin of ['claude', 'codex', 'opencode', 'pi', 'marathon', 'dsh']) {
+  await fs.writeFile(
+    path.join(binDir, bin),
+    `#!/usr/bin/env bash\nprintf '%s\\0' "$(basename "$0")" "$@" >"$HEADLESS_ARGV_FILE"\ncat >"$HEADLESS_STDIN_FILE"\n[ -n "$HEADLESS_ENV_FILE" ] && env >"$HEADLESS_ENV_FILE"\nexit 0\n`,
+    { mode: 0o755 },
+  );
+}
+
+after(async () => {
+  await fs.rm(testDir, { recursive: true, force: true });
+});
+
+async function recordedArgv() {
+  const raw = await fs.readFile(argsFile, 'utf8');
+  return raw.split('\0').slice(0, -1);
+}
+
+// Placeholders: {args} is the pass-through list, {prompt} and {model} are
+// exact, {config} is one or more `-c` pairs, and any other whole-word
+// placeholder is a single generated value such as a temp file.
+function matchArgv(expected, actual) {
+  let j = 0;
+  for (const part of expected) {
+    if (part === '{config}') {
+      assert.equal(actual[j], '-c', `expected -c at ${j}: ${actual}`);
+      while (actual[j] === '-c') j += 2;
+      continue;
+    }
+    if (part === '{args}') {
+      assert.deepEqual(actual.slice(j, j + EXTRA.length), EXTRA);
+      j += EXTRA.length;
+      continue;
+    }
+    const literal = part
+      .replaceAll('{prompt}', PROMPT)
+      .replaceAll('{model}', MODEL);
+    if (/^(\{[A-Za-z]+\}|\$\{[A-Z_]+\})$/.test(literal)) {
+      assert.ok(actual[j], `missing value for ${part}`);
+    } else {
+      assert.equal(actual[j], literal, `argv[${j}] for ${part}`);
+    }
+    j++;
+  }
+  assert.equal(j, actual.length, `unexpected trailing argv: ${actual}`);
+}
+
+async function runSubc(args, extraEnv = {}) {
+  const home = await fs.mkdtemp(path.join(testDir, 'home-'));
+  const fetchLog = path.join(home, 'fetches');
+  const preload = path.join(home, 'record-fetch.mjs');
+  await fs.writeFile(
+    preload,
+    `import { appendFileSync } from 'node:fs';
+globalThis.fetch = async (url) => {
+  appendFileSync(process.env.FETCH_LOG, String(url) + '\\n');
+  throw new Error('network disabled in test');
+};
+`,
+  );
+  await fs.rm(argsFile, { force: true });
+  const result = spawnSync(
+    process.execPath,
+    ['--import', preload, path.join(ROOT, 'bin/cli.js'), ...args],
+    {
+      encoding: 'utf8',
+      input: CALLER_STDIN,
+      env: {
+        ...process.env,
+        PATH: `${binDir}:${process.env.PATH}`,
+        HOME: home,
+        TMPDIR: testDir,
+        SUBC_CONFIG_DIR: path.join(home, 'subc'),
+        SUBCONSCIOUS_API_KEY: 'sk-test',
+        SUBCONSCIOUS_BASE_URL: 'http://127.0.0.1:9',
+        SUBCONSCIOUS_MODEL: MODEL,
+        SUBC_DISABLE_UPDATE_CHECK: '',
+        FETCH_LOG: fetchLog,
+        HEADLESS_ARGV_FILE: argsFile,
+        HEADLESS_STDIN_FILE: stdinFile,
+        ...extraEnv,
+      },
+    },
+  );
+  const fetched = await fs.readFile(fetchLog, 'utf8').catch(() => '');
+  return { ...result, fetched };
+}
+
+test('every headless agent receives exactly its declared argv and stdin', async () => {
+  for (const id of HEADLESS_AGENTS) {
+    const agent = agentById(id);
+    const { headless_argv: argv, headless_stdin: stdin } = agent.launch;
+    for (const [index, prompt] of PROMPTS.entries()) {
+      PROMPT = prompt;
+      const extra = EXTRA_FORMS[index % EXTRA_FORMS.length];
+      const result = await runSubc([
+        agentCommandName(agent),
+        'headless',
+        PROMPT,
+        ...extra,
+      ]);
+      assert.equal(result.status, 0, `${id}: ${result.stderr}`);
+      // The stub writes nothing to stdout, so anything here is subc noise.
+      assert.equal(result.stdout, '', `${id} wrote to stdout`);
+      matchArgv(argv, await recordedArgv());
+      assert.equal(
+        await fs.readFile(stdinFile, 'utf8'),
+        stdin ? stdin.replaceAll('{prompt}', PROMPT) : '',
+        `${id}: stdin for ${JSON.stringify(PROMPT)} ${extra.join(' ')}`,
+      );
+    }
+  }
+});
+
+test('headless without a prompt fails before launching', async () => {
+  for (const id of HEADLESS_AGENTS) {
+    for (const args of [['headless'], ['headless', '--help']]) {
+      const result = await runSubc([agentCommandName(agentById(id)), ...args]);
+      assert.notEqual(result.status, 0, `${id}: ${result.stderr}`);
+      assert.match(result.stderr, /headless PROMPT/, id);
+      await assert.rejects(fs.access(argsFile), `${id} launched anyway`);
+    }
+  }
+});
+
+test('help inside a headless run is refused instead of exiting 0', async () => {
+  const result = await runSubc(['claude', 'headless', 'go', '-h']);
+  assert.notEqual(result.status, 0, result.stderr);
+  assert.equal(result.stdout, '');
+  assert.match(result.stderr, /help is not available in a headless run/);
+  await assert.rejects(fs.access(argsFile));
+});
+
+test('the agent files and the manifest agree on which agents run headless', () => {
+  const declared = AGENTS.filter((agent) => agent.launch?.headless_argv)
+    .map((agent) => agent.id)
+    .sort();
+  assert.deepEqual(declared, [...HEADLESS_AGENTS].sort());
+  const manifest = loadHarnessManifest();
+  for (const agent of AGENTS) {
+    assert.deepEqual(
+      manifest.harnesses[agent.id].launch?.headless_platforms,
+      agent.launch?.headless_platforms,
+      agent.id,
+    );
+  }
+  assert.deepEqual(agentById('deepseek-harness').launch.headless_platforms, [
+    'darwin',
+    'linux',
+    'win32',
+  ]);
+});
+
+test('parseAgentAction recognizes headless only where it is supported', () => {
+  assert.deepEqual(parseAgentAction(agentById('codex'), ['headless', 'go']), {
+    action: 'headless',
+    args: ['headless', 'go'],
+  });
+  assert.throws(
+    () => parseAgentAction(agentById('codex'), ['headless']),
+    /headless PROMPT/,
+  );
+  assert.throws(
+    () => parseAgentAction(agentById('codex'), ['headless', '']),
+    /headless PROMPT/,
+  );
+  for (const help of ['-h', '--help']) {
+    assert.throws(
+      () => parseAgentAction(agentById('codex'), ['headless', help]),
+      /headless PROMPT/,
+    );
+  }
+  assert.throws(
+    () => parseAgentAction(agentById('cursor'), ['headless', 'go']),
+    /does not support headless/,
+  );
+});
+
+test('Windows dsh headless reports a missing binary without prompting or crashing', async () => {
+  const { runWindowsAgent } = await import('../bin/windows/agents.js');
+  const { extractModel } = await import('../bin/agents.js');
+  const emptyDir = await fs.mkdtemp(path.join(testDir, 'empty-path-'));
+  const saved = { PATH: process.env.PATH, exitCode: process.exitCode };
+  const stdout = [];
+  const log = console.log;
+  process.env.PATH = emptyDir;
+  console.log = (...parts) => stdout.push(parts.join(' '));
+  try {
+    const code = await runWindowsAgent(
+      agentById('deepseek-harness'),
+      ['headless', 'go'],
+      {
+        profile: { name: 'default', values: {} },
+        parseAgentAction,
+        extractModel,
+        requireApiKey: async () => 'sk-test',
+        resolvedModelsForLaunch: async () => ({
+          models: [MODEL],
+          source: 'packaged',
+        }),
+        selectLaunchModel: () => MODEL,
+        runbookEnv: () => ({}),
+      },
+    );
+    assert.equal(code, 127);
+  } finally {
+    console.log = log;
+    process.env.PATH = saved.PATH;
+    process.exitCode = saved.exitCode;
+  }
+  assert.deepEqual(stdout, []);
+});
+
+function assertHeadlessLaunch(result) {
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, '');
+  assert.match(result.stderr, /Launching.*Codex/);
+  assert.doesNotMatch(result.fetched, /registry\.npmjs\.org/);
+}
+
+test('subc headless keeps stdout clean, skips npm, and leaves args after -- alone', async () => {
+  const result = await runSubc([
+    'codex',
+    'headless',
+    'do it',
+    '--model',
+    'subconscious/deepseek-v4.1-flash-marathon',
+    '--',
+    '--model',
+    'agent-side-model',
+  ]);
+  assertHeadlessLaunch(result);
+  const argv = await recordedArgv();
+  assert.ok(
+    argv.includes('model=subconscious/deepseek-v4.1-flash-marathon'),
+    argv.join(' '),
+  );
+  assert.deepEqual(argv.slice(-6), [
+    'exec',
+    '--skip-git-repo-check',
+    '--model',
+    'agent-side-model',
+    '--',
+    'do it',
+  ]);
+  assert.equal(await fs.readFile(stdinFile, 'utf8'), '');
+});
+
+test('subc flags before headless still get headless behaviour', async () => {
+  const result = await runSubc([
+    'codex',
+    '--model',
+    'subconscious/deepseek-v4.1-flash-marathon',
+    'headless',
+    'do it',
+  ]);
+  assertHeadlessLaunch(result);
+  const argv = await recordedArgv();
+  assert.ok(
+    argv.includes('model=subconscious/deepseek-v4.1-flash-marathon'),
+    argv.join(' '),
+  );
+  assert.deepEqual(argv.slice(-4), [
+    'exec',
+    '--skip-git-repo-check',
+    '--',
+    'do it',
+  ]);
+});
+
+test('a prompt that looks like a subc flag reaches the agent unchanged', async () => {
+  for (const prompt of ['--model', '-p', '--profile=x', '--model=y']) {
+    const result = await runSubc(['codex', 'headless', prompt]);
+    assertHeadlessLaunch(result);
+    const argv = await recordedArgv();
+    assert.ok(argv.includes(`model=${MODEL}`), `${prompt}: ${argv.join(' ')}`);
+    assert.deepEqual(argv.slice(-4), [
+      'exec',
+      '--skip-git-repo-check',
+      '--',
+      prompt,
+    ]);
+  }
+});
+
+test('a blank prompt is refused before launching', async () => {
+  assert.throws(
+    () => parseAgentAction(agentById('pi'), ['headless', ' \n ']),
+    /headless PROMPT/,
+  );
+  for (const id of HEADLESS_AGENTS) {
+    const result = await runSubc([
+      agentCommandName(agentById(id)),
+      'headless',
+      ' \t\n',
+    ]);
+    assert.notEqual(result.status, 0, `${id}: ${result.stderr}`);
+    await assert.rejects(fs.access(argsFile), `${id} launched anyway`);
+  }
+});
+
+test('help flags after the prompt are refused instead of exiting 0', () => {
+  for (const args of [
+    ['headless', 'go', '-h'],
+    ['headless', 'go', '--', '--help'],
+  ]) {
+    assert.throws(
+      () => parseAgentAction(agentById('codex'), args),
+      /help is not available in a headless run/,
+    );
+  }
+});
+
+test('a prompt of exactly -- reaches the agent', async () => {
+  const result = await runSubc([
+    'codex',
+    'headless',
+    '--',
+    '--model',
+    'subconscious/deepseek-v4.1-flash-marathon',
+  ]);
+  assertHeadlessLaunch(result);
+  const argv = await recordedArgv();
+  // The prompt "--" is not a separator, so the --model after it is subc's.
+  assert.ok(
+    argv.includes('model=subconscious/deepseek-v4.1-flash-marathon'),
+    argv.join(' '),
+  );
+  assert.deepEqual(argv.slice(-4), [
+    'exec',
+    '--skip-git-repo-check',
+    '--',
+    '--',
+  ]);
+});
+
+test('the word headless later in a normal launch changes nothing', async () => {
+  const { extractModel } = await import('../bin/agents.js');
+  const parsed = extractModel(
+    [
+      '--resume',
+      'headless',
+      '--model',
+      'subconscious/deepseek-v4.1-flash-marathon',
+    ],
+    { values: {} },
+  );
+  assert.equal(parsed.model, 'subconscious/deepseek-v4.1-flash-marathon');
+  assert.deepEqual(parsed.rest, ['--resume', 'headless']);
+  const { isHeadlessRequest } = await import('../bin/agents.js');
+  assert.equal(
+    isHeadlessRequest(agentById('claude-code'), ['--model', 'x', 'install']),
+    false,
+  );
+  const result = await runSubc([
+    'codex',
+    '--resume',
+    'headless',
+    '-p',
+    'missing-profile',
+  ]);
+  assert.match(result.stderr, /Profile 'missing-profile' does not exist/);
+});
+
+test('subc and the runbook agree on whether a run is headless', async () => {
+  const { extractModel } = await import('../bin/agents.js');
+  const { headlessPromptIndex } = await import('../bin/headless-args.js');
+  const forms = [
+    ['headless', 'P'],
+    ['--model', 'm', 'headless', 'P'],
+    ['--model=m', 'headless', 'P'],
+    ['--model', '', 'headless', 'P'],
+    ['--model=', 'headless', 'P'],
+    ['--model', '-x', 'headless', 'P'],
+    ['--model', '--', 'headless', 'P'],
+    ['--model', '--model', 'x', 'headless', 'P'],
+    ['--resume', 'headless', 'P'],
+    ['--model'],
+  ];
+  for (const argv of forms) {
+    const runbookSeesHeadless =
+      extractModel(argv, { values: {} }).rest[0] === 'headless';
+    assert.equal(
+      headlessPromptIndex(argv) >= 0,
+      runbookSeesHeadless,
+      JSON.stringify(argv),
+    );
+  }
+  // An empty --model value means "use the catalog", not a missing value.
+  assert.ok(headlessPromptIndex(['--model', '', 'headless', 'P']) >= 0);
+});
+
+for (const agentName of ['codex', 'dsh']) {
+  test(`stopping subc stops the ${agentName} agent it launched`, async () => {
+    const { spawn } = await import('node:child_process');
+    const sleeperDir = await fs.mkdtemp(path.join(testDir, 'sleeper-'));
+    const tmp = await fs.mkdtemp(path.join(testDir, 'tmp-'));
+    const pidFile = path.join(sleeperDir, 'pid');
+    await fs.writeFile(
+      path.join(sleeperDir, agentName),
+      // subc checks the version before launching; only the launch sleeps.
+      `#!/usr/bin/env bash\n[ "$1" = --version ] && { echo "codex-cli 0.200.0"; exit 0; }\necho $$ >"${pidFile}"\nexec sleep 60\n`,
+      { mode: 0o755 },
+    );
+    const home = await fs.mkdtemp(path.join(testDir, 'home-'));
+    const child = spawn(
+      process.execPath,
+      [path.join(ROOT, 'bin/cli.js'), agentName, 'headless', 'wait'],
+      {
+        stdio: 'ignore',
+        env: {
+          ...process.env,
+          PATH: `${sleeperDir}:${process.env.PATH}`,
+          TMPDIR: tmp,
+          HOME: home,
+          SUBC_CONFIG_DIR: path.join(home, 'subc'),
+          SUBCONSCIOUS_API_KEY: 'sk-test',
+          SUBCONSCIOUS_BASE_URL: 'http://127.0.0.1:9',
+          SUBCONSCIOUS_MODEL: MODEL,
+        },
+      },
+    );
+    const exited = new Promise((resolve) =>
+      child.on('exit', (code, signal) => resolve({ code, signal })),
+    );
+    let agentPid;
+    for (let i = 0; i < 100 && !agentPid; i++) {
+      agentPid = Number(await fs.readFile(pidFile, 'utf8').catch(() => 0));
+      if (!agentPid) await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.ok(agentPid, 'agent never started');
+    child.kill('SIGTERM');
+    const { code, signal } = await exited;
+    assert.ok(signal === 'SIGTERM' || code === 143, `${code} ${signal}`);
+    let alive = true;
+    for (let i = 0; i < 30 && alive; i++) {
+      try {
+        process.kill(agentPid, 0);
+        await new Promise((r) => setTimeout(r, 100));
+      } catch {
+        alive = false;
+      }
+    }
+    if (alive) process.kill(agentPid, 'SIGKILL');
+    assert.equal(alive, false, 'agent kept running after subc was stopped');
+    let leftovers = [];
+    for (let i = 0; i < 40; i++) {
+      leftovers = (await fs.readdir(tmp)).filter((name) =>
+        name.startsWith('subc-dsh.'),
+      );
+      if (leftovers.length === 0) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.deepEqual(leftovers, [], 'dsh overlay was not removed');
+  });
+}
+
+test('an agent killed by a signal subc cannot re-raise is not reported as success', async () => {
+  const pipeDir = await fs.mkdtemp(path.join(testDir, 'pipe-'));
+  await fs.writeFile(
+    path.join(pipeDir, 'codex'),
+    '#!/usr/bin/env bash\n[ "$1" = --version ] && { echo "codex-cli 0.200.0"; exit 0; }\nkill -PIPE $$\n',
+    { mode: 0o755 },
+  );
+  const home = await fs.mkdtemp(path.join(testDir, 'home-'));
+  const result = spawnSync(
+    process.execPath,
+    [path.join(ROOT, 'bin/cli.js'), 'codex', 'headless', 'go'],
+    {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${pipeDir}:${process.env.PATH}`,
+        HOME: home,
+        SUBC_CONFIG_DIR: path.join(home, 'subc'),
+        SUBCONSCIOUS_API_KEY: 'sk-test',
+        SUBCONSCIOUS_BASE_URL: 'http://127.0.0.1:9',
+        SUBCONSCIOUS_MODEL: MODEL,
+      },
+    },
+  );
+  assert.equal(result.status, 128 + os.constants.signals.SIGPIPE);
+});
+
+test('profile flags do not change whether subc sees a headless run', async () => {
+  // Without -p this is "--model headless": a normal launch with model
+  // "headless". Both subc and the runbook must agree on that.
+  const result = await runSubc([
+    'codex',
+    '--model',
+    '-p',
+    'default',
+    'headless',
+    'do it',
+  ]);
+  const argv = await recordedArgv();
+  const runbookHeadless = argv.includes('exec');
+  assert.equal(runbookHeadless, false, argv.join(' '));
+  assert.match(result.stdout, /Launching/);
+  assert.match(result.fetched, /registry\.npmjs\.org/);
+  // Not headless, so a later --profile= is subc's profile flag.
+  const profiled = await runSubc([
+    'codex',
+    '--model',
+    '-p',
+    'default',
+    'headless',
+    '--profile=nope',
+  ]);
+  assert.match(profiled.stderr, /Profile 'nope' does not exist/);
+});
+
+test('the dsh overlay is removed when the whole process group is stopped', async () => {
+  const { spawn } = await import('node:child_process');
+  const groupDir = await fs.mkdtemp(path.join(testDir, 'group-'));
+  const tmp = await fs.mkdtemp(path.join(testDir, 'tmp-'));
+  const pidFile = path.join(groupDir, 'pid');
+  await fs.writeFile(
+    path.join(groupDir, 'dsh'),
+    `#!/usr/bin/env bash\necho $$ >"${pidFile}"\nexec sleep 60\n`,
+    { mode: 0o755 },
+  );
+  const home = await fs.mkdtemp(path.join(testDir, 'home-'));
+  const runbook = spawn(
+    process.execPath,
+    [path.join(ROOT, 'bin/cli.js'), 'dsh', 'headless', 'go'],
+    {
+      detached: true,
+      stdio: 'ignore',
+      env: {
+        ...process.env,
+        PATH: `${groupDir}:${process.env.PATH}`,
+        TMPDIR: tmp,
+        HOME: home,
+        SUBC_CONFIG_DIR: path.join(home, 'subc'),
+        SUBCONSCIOUS_API_KEY: 'sk-test',
+        SUBCONSCIOUS_BASE_URL: 'http://127.0.0.1:9',
+        SUBCONSCIOUS_MODEL: MODEL,
+      },
+    },
+  );
+  const exited = new Promise((resolve) => runbook.on('exit', resolve));
+  let started = false;
+  for (let i = 0; i < 100 && !started; i++) {
+    started = Boolean(await fs.readFile(pidFile, 'utf8').catch(() => ''));
+    if (!started) await new Promise((r) => setTimeout(r, 100));
+  }
+  assert.ok(started, 'dsh never started');
+  process.kill(-runbook.pid, 'SIGTERM');
+  await exited;
+  let leftovers = [];
+  for (let i = 0; i < 40; i++) {
+    leftovers = (await fs.readdir(tmp)).filter((name) =>
+      name.startsWith('subc-dsh.'),
+    );
+    if (leftovers.length === 0) break;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  assert.deepEqual(leftovers, [], 'dsh overlay leaked after a group stop');
+});
+
+test('headless sends every harness to the given endpoint, key, and model', async () => {
+  const envFile = path.join(testDir, 'agent-env');
+  const endpoint = 'http://127.0.0.1:9/custom-gateway';
+  const model = 'subconscious/deepseek-v4.1-flash-marathon';
+  for (const agent of ['claude', 'codex', 'opencode']) {
+    await fs.rm(envFile, { force: true });
+    const result = await runSubc([agent, 'headless', 'go', '--model', model], {
+      SUBCONSCIOUS_BASE_URL: endpoint,
+      SUBCONSCIOUS_API_KEY: 'sk-own-key',
+      SUBCONSCIOUS_MODEL: '',
+      CLAUDE_GATEWAY_URL: 'http://127.0.0.1:9/somewhere-else',
+      HEADLESS_ENV_FILE: envFile,
+    });
+    assert.equal(result.status, 0, `${agent}: ${result.stderr}`);
+    assert.doesNotMatch(result.fetched, /registry\.npmjs\.org/, agent);
+    const env = Object.fromEntries(
+      (await fs.readFile(envFile, 'utf8'))
+        .split('\n')
+        .filter((line) => line.includes('='))
+        .map((line) => [
+          line.slice(0, line.indexOf('=')),
+          line.slice(line.indexOf('=') + 1),
+        ]),
+    );
+    assert.equal(env.GATEWAY_URL, endpoint, agent);
+    assert.equal(env.API_KEY, 'sk-own-key', agent);
+    assert.equal(env.MODEL, model, agent);
+    if (agent === 'claude') {
+      assert.equal(env.ANTHROPIC_BASE_URL, endpoint);
+    }
+  }
+});
