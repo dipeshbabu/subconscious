@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -222,5 +222,39 @@ test('Copilot install and uninstall preserve user providers with similar names',
     }
   } finally {
     await fs.rm(home, { recursive: true, force: true });
+  }
+});
+
+test('Copilot hook commands execute from home paths containing shell characters', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'subc-copilot-path-'));
+  const home = path.join(root, `space & "quote" 'apostrophe' home`);
+  try {
+    await createVsCodeUserDirectory(home);
+    for (let run = 0; run < 2; run++) {
+      const result = await runInstall(home);
+      assert.equal(result.code, 0, result.stderr);
+      const hooks = JSON.parse(
+        await fs.readFile(
+          path.join(home, '.copilot', 'hooks', 'subconscious-hooks.json'),
+          'utf8',
+        ),
+      );
+      for (const event of ['UserPromptSubmit', 'PreCompact']) {
+        assert.equal(hooks.hooks[event].length, 1);
+        const executed = spawnSync(
+          'sh',
+          ['-c', hooks.hooks[event][0].command],
+          {
+            encoding: 'utf8',
+            input: '',
+            env: { ...process.env, HOME: home },
+          },
+        );
+        assert.equal(executed.status, 0, executed.stderr);
+        assert.deepEqual(JSON.parse(executed.stdout), { continue: true });
+      }
+    }
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
   }
 });

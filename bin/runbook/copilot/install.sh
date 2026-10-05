@@ -396,7 +396,10 @@ install_hook_script() {
 }
 
 write_hooks_json() {
-  sed "s|HOOK_SH_PATH|${HOOK_DST}|g" "$HOOKS_TEMPLATE" >"$HOOKS_JSON"
+  local hook_command
+  hook_command="$(jq -rn --arg path "$HOOK_DST" '$path | @sh')"
+  jq --arg command "$hook_command" '.hooks[][].command = $command' \
+    "$HOOKS_TEMPLATE" >"$HOOKS_JSON"
 }
 
 uninstall_hooks() {
