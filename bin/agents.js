@@ -283,7 +283,8 @@ export const RUNBOOK_ENV_DESCRIPTION = Object.freeze({
     {
       name: 'SUBCONSCIOUS_MODELS',
       value: '{catalog}',
-      description: 'Newline-separated live model catalog.',
+      description:
+        'Newline-separated model catalog. Set by the caller, it pins the catalog and skips live discovery; otherwise it is the live catalog.',
     },
     {
       name: 'PATH',
@@ -362,6 +363,7 @@ async function resolvedModelsForLaunch(profile, apiKey, selectedModel) {
     apiKey,
     selectedModel,
     fallbackModels: PACKAGED_MODELS,
+    pinnedModels: process.env.SUBCONSCIOUS_MODELS,
   });
   if (catalog.source === 'public' && apiKey) {
     console.error(`  ${c.dim}${PUBLIC_CATALOG_FALLBACK_MESSAGE}${c.reset}\n`);
@@ -390,7 +392,7 @@ export function selectLaunchModel(requestedModel, modelSource, catalog) {
 async function runRunbookSetup(agent, argv, profile) {
   const script = agent.runbook.setup_script;
   if (isSetupWithoutAuth(argv) || agent.runbook.setup_needs_auth === false) {
-    // Status, uninstall, and Marathon's binary install read no model or
+    // Status and uninstall read no model or
     // agent setting, so an invalid saved one must not block them.
     const lenient = { strict: false };
     const base = { ...(profile?.values || {}), ...process.env };
@@ -521,9 +523,8 @@ async function launchAgent(agent, argv, profile, headless) {
   const apiKey = await requireApiKey(profile, agent);
   if (!apiKey) return 1;
 
-  const mayPrompt = !headless;
-  const binDir = await ensureInstalled(agent, { mayPrompt });
-  await ensureMinimumVersion(agent, binDir, { mayPrompt });
+  const binDir = await ensureInstalled(agent);
+  await ensureMinimumVersion(agent, binDir, { mayPrompt: !headless });
   const catalog = await resolvedModelsForLaunch(
     profile,
     apiKey,

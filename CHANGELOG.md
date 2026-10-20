@@ -1,5 +1,52 @@
 # Changelog
 
+## [6.2.1](https://github.com/subconscious-systems/subconscious/compare/v6.2.0...v6.2.1) (2026-10-06)
+
+
+### Bug fixes
+
+* **tui:** draw the TUI before session discovery can block startup ([#144](https://github.com/subconscious-systems/subconscious/issues/144)) ([187e39b](https://github.com/subconscious-systems/subconscious/commit/187e39b2f15b1f879f8d9dc0f3c9648c03205734))
+
+## [6.2.0](https://github.com/subconscious-systems/subconscious/compare/v6.1.0...v6.2.0) (2026-10-06)
+
+
+### Features
+
+* install the CLI with curl and stop installing agents ([#142](https://github.com/subconscious-systems/subconscious/issues/142)) ([ab194a8](https://github.com/subconscious-systems/subconscious/commit/ab194a8ecb21b52681793c58f17d8f0667a7ebb7))
+* remove Marathon and make OpenCode the default coding agent ([#130](https://github.com/subconscious-systems/subconscious/issues/130)) ([4f51d8f](https://github.com/subconscious-systems/subconscious/commit/4f51d8f6861c13e5a220606d95acd0350b32334a))
+
+
+### Bug fixes
+
+* **models:** let an explicit SUBCONSCIOUS_MODELS pin the launch catalog ([#136](https://github.com/subconscious-systems/subconscious/issues/136)) ([6c46935](https://github.com/subconscious-systems/subconscious/commit/6c469355ad90ca2965b6f4c233c5a88bc7d614b5))
+
+## [6.1.0](https://github.com/subconscious-systems/subconscious/compare/v6.0.1...v6.1.0) (2026-10-05)
+
+
+### Features
+
+* publish a machine-readable harness manifest ([#104](https://github.com/subconscious-systems/subconscious/issues/104)) ([ca1b02c](https://github.com/subconscious-systems/subconscious/commit/ca1b02ce2eabe8252808b5256de3a92ccedd8e62))
+* trim screenshots before upload in Pi and OpenCode (SUBCON-678) ([#95](https://github.com/subconscious-systems/subconscious/issues/95)) ([15306e6](https://github.com/subconscious-systems/subconscious/commit/15306e6e65830ce411c09a6d1653d7193b8dc7ec))
+
+
+### Bug fixes
+
+* **clipboard:** read JPEG images from Linux clipboards ([#122](https://github.com/subconscious-systems/subconscious/issues/122)) ([514deaa](https://github.com/subconscious-systems/subconscious/commit/514deaaaaf00c595ec23722171ba3a4f23364eb6))
+* **config:** stop redacting token budget settings ([#98](https://github.com/subconscious-systems/subconscious/issues/98)) ([036841f](https://github.com/subconscious-systems/subconscious/commit/036841f6725e4f65a8b103bf4383acbc36ff9c6d))
+* **copilot:** preserve user config and quote hook paths ([#116](https://github.com/subconscious-systems/subconscious/issues/116)) ([0668cd8](https://github.com/subconscious-systems/subconscious/commit/0668cd889cf964c163bae3d9f2bb10d4ce87baff))
+* **cursor:** quote hook executable paths and escape JSON ([df4d220](https://github.com/subconscious-systems/subconscious/commit/df4d2205029d5710ed949a1ae0bffb07be881aeb))
+* **cursor:** quote hook executable paths and escape JSON ([6a155cb](https://github.com/subconscious-systems/subconscious/commit/6a155cb2efdf35a1fd116b6481c2bedee909018b))
+* **feedback:** reject missing option values ([#111](https://github.com/subconscious-systems/subconscious/issues/111)) ([2cad416](https://github.com/subconscious-systems/subconscious/commit/2cad4161887f83a2525cba6ef985d40d85b66801))
+* keep ~/.codex/hooks.json when the hook merge fails ([#105](https://github.com/subconscious-systems/subconscious/issues/105)) ([27d3903](https://github.com/subconscious-systems/subconscious/commit/27d3903f3dcb48c29347dc3cb087f0d5323abde2))
+* **models:** bound response body reads by discovery timeout ([#109](https://github.com/subconscious-systems/subconscious/issues/109)) ([52c4194](https://github.com/subconscious-systems/subconscious/commit/52c41947f55309b1f6312d5dcdcdb6a3c18ed6ad))
+* **pi:** load compaction credentials from the configured agent directory ([#118](https://github.com/subconscious-systems/subconscious/issues/118)) ([a3cca6c](https://github.com/subconscious-systems/subconscious/commit/a3cca6c819fe45686bbb04e98e1cb71b30903e21))
+* **sessions:** ignore non-object JSONL records ([#110](https://github.com/subconscious-systems/subconscious/issues/110)) ([27e45f5](https://github.com/subconscious-systems/subconscious/commit/27e45f538aab8f962009a4557dde929b96ab9c9d))
+* **tui:** reload complete state when switching profiles ([#113](https://github.com/subconscious-systems/subconscious/issues/113)) ([687a736](https://github.com/subconscious-systems/subconscious/commit/687a7367aa17d8986a3e9a3bcdddfb889e057a0a))
+* **update-check:** order prerelease identifiers by ASCII ([#97](https://github.com/subconscious-systems/subconscious/issues/97)) ([75d0675](https://github.com/subconscious-systems/subconscious/commit/75d06750ca27acfbc00458e71a14f93066678ec7))
+* **upgrade:** use semver precedence when comparing versions ([#96](https://github.com/subconscious-systems/subconscious/issues/96)) ([6044967](https://github.com/subconscious-systems/subconscious/commit/604496718660da2bed40930a9c1d3e0e914fe03b))
+* **usage:** round token counts to significant figures before choosing K/M/B ([#85](https://github.com/subconscious-systems/subconscious/issues/85)) ([281e995](https://github.com/subconscious-systems/subconscious/commit/281e99544d2dbbf4ac15be8ec72f2a48ddf1d98e))
+* **whoami:** stop reporting server errors as an invalid key ([#101](https://github.com/subconscious-systems/subconscious/issues/101)) ([ab28d82](https://github.com/subconscious-systems/subconscious/commit/ab28d82ef80bec660bbeea2f18a47a5b18e39a16))
+
 ## [6.0.1](https://github.com/subconscious-systems/subconscious/compare/v6.0.0...v6.0.1) (2026-09-28)
 
 

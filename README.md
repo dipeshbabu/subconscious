@@ -4,25 +4,59 @@ Log in to Subconscious, then run coding agents against the Subconscious gateway.
 
 ## Quick start
 
+Install with npm:
+
 ```bash
 npm install -g subconscious-cli
+```
+
+Or install on macOS or Linux without npm:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/subconscious-systems/subconscious/main/scripts/install.sh | bash
+```
+
+Then log in and launch an agent:
+
+```bash
 subc login
-subc marathon
+subc opencode
 subc claude
 ```
+
+The curl installer downloads the `subconscious-cli` tarball from the npm
+registry, checks it against the registry's integrity hash, and installs it in
+`~/.local/share/subconscious-cli` with a `subc` link in `~/.local/bin`. It does
+not need npm, so a registry policy that blocks `npm install -g` does not stop
+it. Node.js 18 or newer must already be installed, because `subc` runs on it.
+If `~/.local/bin` is not on your `PATH`, the installer prints the line to add.
+Run it again to reinstall or update. These variables change its defaults:
+
+| Variable | Default |
+| --- | --- |
+| `SUBC_VERSION` | `latest` (a version such as `6.1.0`, or a dist-tag) |
+| `SUBC_INSTALL_DIR` | `~/.local/share/subconscious-cli` |
+| `SUBC_BIN_DIR` | `~/.local/bin` |
+| `SUBC_REGISTRY` | `https://registry.npmjs.org` |
+
+On Windows, use npm (see [Native Windows support](#native-windows-support)).
+
+subc does not install the coding agents. Install each agent you use from its
+vendor. If an agent is missing, `subc <agent>` prints its install command and
+official install page, then exits with status 127.
 
 Every interactive `subc` command checks npm for a newer CLI release. When an
 update is available, a notice shows the installed and latest versions and lets
 you select **Update now** or **Skip for now** with the arrow keys and Enter.
 Each option describes what it will do, and the active option is highlighted.
-Update runs `npm install -g subconscious-cli@latest`; Skip continues the
-requested command.
+Update runs `npm install -g subconscious-cli@latest`, or the curl installer
+again if that is how subc was installed; Skip continues the requested command.
 Non-interactive commands automatically skip, and registry errors and timeouts
 never block the requested command. Set `SUBC_DISABLE_UPDATE_CHECK=1` to suppress
 the check in offline automation.
 
 Login creates both the saved credential and a ready-to-use `default` profile,
-so Subconscious Code, Claude Code, Codex, OpenCode, and DeepSeek Harness can launch immediately.
+so OpenCode, Claude Code, Codex, and DeepSeek Harness can launch immediately.
 Persistent editor and Pi integrations are installed per agent:
 
 ```bash
@@ -53,8 +87,8 @@ Every command accepts `help` as a subcommand. These only read the selected
 profile; they do not authenticate, install, configure, or launch anything:
 
 ```bash
+subc opencode help
 subc claude help
-subc marathon help
 subc codex help
 subc cursor help
 subc config help
@@ -69,7 +103,6 @@ gateway environment applied for that process. Arguments pass through as usual:
 
 ```bash
 subc claude --continue
-subc marathon -- -p "fix the tests"
 subc codex exec "write a test"
 subc opencode
 subc pi
@@ -105,8 +138,9 @@ Update with `npm.cmd install -g subconscious-cli@latest` or `subc.cmd upgrade --
 
 If PowerShell's execution policy blocks npm-generated `.ps1` entry points, use
 `npm.cmd` and `subc.cmd` or run the same commands in Command Prompt. No policy
-change is required. Pi must already be installed; other terminal agents offer
-their Windows installer when missing in an interactive terminal.
+change is required. subc does not install the agents on Windows either. If an
+agent is missing, subc prints its install command and official install page,
+then exits with status 127.
 
 Native executables and standard npm `.cmd` shims are supported. The launcher
 invokes the underlying executable or Node entry point directly, preserving
@@ -129,19 +163,6 @@ VS Code's secret store and prompts for its key. Its configuration goes under
 `%APPDATA%\Code\User` (or Code - Insiders/VSCodium). Rerun install after moving
 your Node installation, because hooks record the absolute Node executable path.
 
-To install the native x64 `marathon.exe` (stable releases starting with 0.1.4), clear
-any preview version pin from the current PowerShell session:
-
-```powershell
-Remove-Item Env:SC_CODE_VERSION -ErrorAction SilentlyContinue
-subc.cmd marathon install
-subc.cmd marathon
-```
-
-The installer requires the selected release's Windows asset and SHA-256
-checksum; it reports a clear error if unavailable and never downloads a Unix
-binary as a fallback. Windows ARM64 binaries are not currently published.
-
 Run `npm run test:windows` from the repository root for the separate Windows suite. The
 Windows CI job also builds/tests the Go TUI. Existing Unix tests and runbooks
 remain separate and unchanged.
@@ -152,18 +173,17 @@ The packaged integrations live in `bin/runbook`.
 
 | Command | Behavior |
 | --- | --- |
-| `subc marathon` | Launch Subconscious Code with the active gateway, key, model, and DLR transport |
+| `subc opencode` | Launch OpenCode with the runbook provider, client header, and context/output limits |
 | `subc claude` | Launch Claude Code with the runbook environment, context limits, subagent limits, and OTEL usage reporting |
 | `subc codex` | Launch Codex with the runbook provider, temporary model catalog, and surgically merged compaction hooks |
-| `subc opencode` | Launch OpenCode with the runbook provider, client header, and context/output limits |
-| `subc cursor install` | Install/update Cursor conversation and compaction hooks |
-| `subc copilot install` | Install/update the VS Code custom endpoint and Copilot hooks |
 | `subc pi` | Refresh the Pi provider from the live catalog, then launch |
+| `subc copilot install` | Install/update the VS Code custom endpoint and Copilot hooks |
 | `subc dsh` | Launch the DeepSeek Harness Web UI with a temporary provider populated from the live catalog |
+| `subc cursor install` | Install/update Cursor conversation and compaction hooks (Cursor desktop app and IDE only — the Cursor CLI is not supported) |
 
 ## Headless runs
 
-`subc <agent> headless PROMPT [args...]` runs one task without a terminal UI and exits with the agent's status. It works for `claude`, `codex`, `opencode`, `pi`, `marathon`, and `dsh`, and uses the same setup as an interactive launch. It never prompts: there is no update check, a missing agent fails with its install command, stdin is not read, and stdout carries only the agent's own output. Remaining arguments go to the agent, for example `subc claude headless "fix the failing test" --output-format stream-json --verbose`. subc reads `-p`/`--profile` and `--model` itself; put agent options with those names after `--`.
+`subc <agent> headless PROMPT [args...]` runs one task without a terminal UI and exits with the agent's status. It works for `claude`, `codex`, `opencode`, `pi`, and `dsh`, and uses the same setup as an interactive launch. It never prompts: there is no update check, a missing agent fails with its install command, stdin is not read, and stdout carries only the agent's own output. Remaining arguments go to the agent, for example `subc claude headless "fix the failing test" --output-format stream-json --verbose`. subc reads `-p`/`--profile` and `--model` itself; put agent options with those names after `--`.
 
 The agents keep their own permission defaults, so a run that should edit files usually needs the agent's permission flags in `[args...]`. For example, `codex exec` uses a read-only sandbox and requires a git repository unless given `--skip-git-repo-check`.
 
@@ -188,7 +208,6 @@ The endpoint must speak the same APIs as the Subconscious gateway: Anthropic Mes
 | `codex` | `codex exec -- PROMPT` |
 | `opencode` | `opencode run`, with the prompt on stdin |
 | `pi` | `pi --print`, with the prompt on stdin |
-| `marathon` | `marathon --print=PROMPT` |
 | `dsh` | `dsh --profile headless`, with the prompt on stdin |
 
 The prompt is always the argument after `headless`, including for `dsh`, which no longer reads a task piped into subc. Where the table says stdin, subc passes the prompt that way so it reaches the agent unchanged even when it starts with `-` or `@`. On Windows only `dsh` supports headless runs.
@@ -222,7 +241,7 @@ Each `harnesses.<id>` entry has:
 
 | Field | Meaning |
 | --- | --- |
-| `install` | `method`, `package` or `repository`, `version` or `channel`, `minimum_version`, release `targets`, and the per-OS `commands`. |
+| `install` | `method`, `package` or `repository`, `version` or `channel`, `minimum_version`, release `targets`, the per-OS `commands`, and `url`, the vendor's official install page. subc shows `commands` and `url` and never runs them. |
 | `prerequisites` | Commands the runbook needs, such as `jq`, with what needs them and whether they are required. `a\|b` means either one. |
 | `binary` | Executable name, or `null` for IDE integrations. |
 | `launch` | `argv` template, `headless_argv` for `subc <agent> headless` (absent when unsupported), `headless_stdin` when the prompt is passed on stdin instead, `headless_platforms` (`darwin`, `linux`, `win32`) where it works, `resume` and `handoff` argv for `subc sessions`, Codex's `config_flag`, and whether a launch also writes persistent files. |
@@ -240,7 +259,7 @@ Enumerated values:
 
 | Field | Values |
 | --- | --- |
-| `install.method` | `npm`, `script`, `github-release`, `user`, `null` |
+| `install.method` | `npm`, `user`, `null` |
 | `compaction.default` | `on`, `unknown` |
 | knob `kind` | `env`, `cli-config`, `config-field`, `model-catalog-field`, `null` |
 | `threshold.semantics` | `window`, `trigger` |
@@ -293,7 +312,7 @@ subc sessions resume codex:SESSION_ID --harness opencode
 ```
 
 The catalog discovers recent sessions written locally by Claude Code, Codex,
-OpenCode, Pi, and Subconscious Code. It shows each session's originating
+OpenCode, and Pi. It shows each session's originating
 harness, title, last activity, project directory, and model when the harness
 records one. Selecting the original harness uses its native resume mechanism.
 
@@ -309,25 +328,11 @@ conversation stores do not expose a stable local resume interface. A session
 whose local transcript is missing remains available for native resume but does
 not offer cross-harness destinations.
 
-If Subconscious Code, Claude Code, Codex, OpenCode, or DeepSeek Harness is missing, an interactive terminal offers
-to install it before launching. Pi refreshes its Subconscious provider on every
+subc never installs OpenCode, Claude Code, Codex, DeepSeek Harness, or Pi. If
+one is missing, subc prints its install command and official install page, then
+exits with status 127, in interactive and headless runs alike. Pi refreshes its Subconscious provider on every
 `subc pi` launch while preserving all other providers in `models.json`; its
 executable must already be installed.
-
-`subc marathon install` detects the operating system and architecture, then downloads
-and checksum-verifies the matching precompiled release from
-`subconscious-systems/subconscious-code`. Apple Silicon and Intel macOS plus
-x86_64 and ARM64 Linux and Windows x64 are supported; Cargo is not required.
-
-Starting with CLI 4.1.1, `subc marathon` is the native agent command. On Windows,
-the installer writes `marathon.exe`, avoiding the system `sc.exe` command.
-`subc sc` remains a compatibility alias but never launches Windows service
-control. Older pinned release binaries are also installed as `marathon.exe`.
-Starting with CLI 4.1.2 and native agent 0.1.6, macOS and Linux also install
-and launch `marathon`. Existing `.sc` settings, sessions, and `SC_*` variables
-are preserved on every platform. Shell behavior is unchanged. Older Unix
-release archives are installed under the new name; existing `sc` files are
-left untouched. `subc sc` remains a compatibility alias on every platform.
 
 `subc codex` disables Codex apps and plugin tools for that launch by default so
 requests remain below the gateway's 128-tool limit. Core coding tools remain
@@ -383,7 +388,7 @@ rewritten. Run a one-shot task with `subc dsh headless "PROMPT"`.
 ```
 
 The file is mode `600` and contains the shared gateway URL, API key, model,
-optional per-agent key overrides, and all Subconscious Code/Claude/Codex/OpenCode/Pi/Copilot/
+optional per-agent key overrides, and all Claude/Codex/OpenCode/Pi/Copilot/
 DeepSeek Harness context and output settings used by the packaged runbook scripts.
 
 ```bash
